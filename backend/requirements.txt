@@ -1,0 +1,11 @@
+fastapi==0.115.14
+uvicorn==0.34.0
+supabase>=2.11.0
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings==2.7.0
+apscheduler==3.10.4
+tenacity==8.3.0
+httpx==0.28.1
+websockets==14.1
+nepse @ git+https://github.com/basic-bgnr/NepseUnofficialApi.git@dev
