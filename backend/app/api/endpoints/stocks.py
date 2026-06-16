@@ -42,55 +42,61 @@ async def get_live_market_data(
     Formats assets so they can drop directly into next.js state.
     """
     try:
-        raw_live = await live_service.get_live_market()
-        
-        # If the market is closed or no live data is returned, fall back to FeinTra latest records
-        if not raw_live:
-            logger.info("Market is closed. Fetching last closing prices from Supabase DB...")
-            latest_res = repo.client.table("FeinTra").select("Date").order("Date", desc=True).limit(1).execute()
-            if latest_res.data:
-                latest_date = latest_res.data[0]["Date"]
-                db_res = repo.client.table("FeinTra").select("*").eq("Date", latest_date).limit(1000).execute()
-                raw_live = []
-                for r in (db_res.data or []):
-                    symbol = r.get("Symbol")
-                    if not symbol:
-                        continue
-                    
-                    vol_str = r.get("Volume")
-                    vol = 0
-                    if vol_str:
-                        try:
-                            vol = int(float(vol_str))
-                        except Exception:
-                            pass
-                    
-                    to_str = r.get("Turn Over")
-                    turnover = 0.0
-                    if to_str and to_str != "-":
-                        try:
-                            turnover = float(to_str)
-                        except Exception:
-                            pass
-                    
-                    pct_str = r.get("Percent Change", "0.00 %").replace("%", "").strip()
-                    try:
-                        pct = float(pct_str)
-                    except Exception:
-                        pct = 0.0
+        raw_live = []
+        try:
+            raw_live = await live_service.get_live_market()
+        except Exception as e:
+            logger.warning(f"Error fetching live market data from NEPSE API: {e}. Falling back to Supabase DB.")
 
-                    raw_live.append({
-                        "symbol": symbol.strip().upper(),
-                        "securityName": symbol.strip().upper(),
-                        "lastTradedPrice": float(r.get("Close") or 0.0),
-                        "percentageChange": pct,
-                        "totalTradeQuantity": vol,
-                        "highPrice": float(r.get("High") or r.get("Close") or 0.0),
-                        "lowPrice": float(r.get("Low") or r.get("Close") or 0.0),
-                        "openPrice": float(r.get("Open") or r.get("Close") or 0.0),
-                        "previousClose": float(r.get("Close") or 0.0) - (float(r.get("Close") or 0.0) * pct / 100.0),
-                        "totalTradeValue": turnover
-                    })
+        # If the market is closed, live call failed, or no live data is returned, fall back to FeinTra latest records
+        if not raw_live:
+            logger.info("Live market data not available. Fetching last closing prices from Supabase DB...")
+            try:
+                latest_res = repo.client.table("FeinTra").select("Date").order("Date", desc=True).limit(1).execute()
+                if latest_res.data:
+                    latest_date = latest_res.data[0]["Date"]
+                    db_res = repo.client.table("FeinTra").select("*").eq("Date", latest_date).limit(1000).execute()
+                    for r in (db_res.data or []):
+                        symbol = r.get("Symbol")
+                        if not symbol:
+                            continue
+                        
+                        vol_str = r.get("Volume")
+                        vol = 0
+                        if vol_str:
+                            try:
+                                vol = int(float(vol_str))
+                            except Exception:
+                                pass
+                        
+                        to_str = r.get("Turn Over")
+                        turnover = 0.0
+                        if to_str and to_str != "-":
+                            try:
+                                turnover = float(to_str)
+                            except Exception:
+                                pass
+                        
+                        pct_str = r.get("Percent Change", "0.00 %").replace("%", "").strip()
+                        try:
+                            pct = float(pct_str)
+                        except Exception:
+                            pct = 0.0
+
+                        raw_live.append({
+                            "symbol": symbol.strip().upper(),
+                            "securityName": symbol.strip().upper(),
+                            "lastTradedPrice": float(r.get("Close") or 0.0),
+                            "percentageChange": pct,
+                            "totalTradeQuantity": vol,
+                            "highPrice": float(r.get("High") or r.get("Close") or 0.0),
+                            "lowPrice": float(r.get("Low") or r.get("Close") or 0.0),
+                            "openPrice": float(r.get("Open") or r.get("Close") or 0.0),
+                            "previousClose": float(r.get("Close") or 0.0) - (float(r.get("Close") or 0.0) * pct / 100.0),
+                            "totalTradeValue": turnover
+                        })
+            except Exception as db_err:
+                logger.error(f"Error fetching fallback prices from Supabase: {db_err}")
 
         formatted_assets = []
         for item in raw_live:

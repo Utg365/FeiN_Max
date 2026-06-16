@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useTrading } from '../../context/TradingContext';
 
 function fmt(n) {
@@ -59,6 +59,72 @@ function NepseChart({ symbol, livePrice }) {
   const [rawData, setRawData]       = useState([]);
   const [stats, setStats]           = useState(null);
 
+  // Indicators state
+  const [showSMA20, setShowSMA20]   = useState(false);
+  const [showSMA50, setShowSMA50]   = useState(false);
+  const [showBB, setShowBB]         = useState(false);
+  const [hoverData, setHoverData]   = useState(null);
+
+  // Helper formats
+  function fmt(n) {
+    if (n === null || n === undefined || isNaN(n)) return '—';
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  // Indicator mathematical helpers
+  function computeSMAValues(closes, period) {
+    const values = [];
+    for (let i = 0; i < closes.length; i++) {
+      if (i < period - 1) {
+        values.push(null);
+      } else {
+        const sum = closes.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
+        values.push(sum / period);
+      }
+    }
+    return values;
+  }
+
+  function computeBBValues(closes, period = 20) {
+    const upper = [];
+    const middle = [];
+    const lower = [];
+    for (let i = 0; i < closes.length; i++) {
+      if (i < period - 1) {
+        upper.push(null);
+        middle.push(null);
+        lower.push(null);
+        continue;
+      }
+      const slice = closes.slice(i - period + 1, i + 1);
+      const mean = slice.reduce((a, b) => a + b, 0) / period;
+      const variance = slice.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / period;
+      const stdDev = Math.sqrt(variance);
+      upper.push(mean + 2 * stdDev);
+      middle.push(mean);
+      lower.push(mean - 2 * stdDev);
+    }
+    return { upper, middle, lower };
+  }
+
+  // Memoize data with indicators for quick lookup
+  const dataWithIndicators = useMemo(() => {
+    if (rawData.length === 0) return [];
+    const closes = rawData.map(r => r.close || r.ltp || 0);
+    const sma20Values = computeSMAValues(closes, 20);
+    const sma50Values = computeSMAValues(closes, 50);
+    const bbValues = computeBBValues(closes, 20);
+
+    return rawData.map((r, i) => ({
+      ...r,
+      sma20: sma20Values[i],
+      sma50: sma50Values[i],
+      bbUpper: bbValues.upper[i],
+      bbBasis: bbValues.middle[i],
+      bbLower: bbValues.lower[i],
+    }));
+  }, [rawData]);
+
   // Fetch historical data from Supabase (via backend proxy)
   useEffect(() => {
     let cancelled = false;
@@ -76,16 +142,25 @@ function NepseChart({ symbol, livePrice }) {
 
         if (Array.isArray(json) && json.length > 0) {
           setRawData(json);
-          // Compute stats from last row
           const last = json[json.length - 1];
           const prev = json[json.length - 2];
-          setStats({
+          const latestStats = {
             ltp:    last.ltp   ?? last.close ?? 0,
             open:   last.open  ?? 0,
             high:   last.high  ?? 0,
             low:    last.low   ?? 0,
             volume: last.volume ?? 0,
             change: prev ? ((last.close - prev.close) / prev.close) * 100 : 0,
+          };
+          setStats(latestStats);
+          setHoverData({
+            open: latestStats.open,
+            high: latestStats.high,
+            low: latestStats.low,
+            close: latestStats.ltp,
+            volume: latestStats.volume,
+            change: latestStats.change,
+            date: last.date,
           });
         } else {
           // Fallback: generate plausible mock candles
@@ -111,6 +186,18 @@ function NepseChart({ symbol, livePrice }) {
           }
           setRawData(mocked);
           setStats(null);
+          if (mocked.length > 0) {
+            const last = mocked[mocked.length - 1];
+            setHoverData({
+              open: last.open,
+              high: last.high,
+              low: last.low,
+              close: last.close,
+              volume: last.volume,
+              change: 0,
+              date: last.date,
+            });
+          }
         }
       } catch (err) {
         if (!cancelled) setError(err.message);
@@ -123,11 +210,10 @@ function NepseChart({ symbol, livePrice }) {
     return () => { cancelled = true; };
   }, [symbol, livePrice]);
 
-  // Build / rebuild chart when data or chartType changes
+  // Build / rebuild chart when data, chartType, or indicators change
   useEffect(() => {
-    if (!containerRef.current || rawData.length === 0) return;
+    if (!containerRef.current || dataWithIndicators.length === 0) return;
 
-    // Dynamically import lightweight-charts to avoid SSR issues
     let destroyed = false;
 
     async function buildChart() {
@@ -176,7 +262,7 @@ function NepseChart({ symbol, livePrice }) {
           wickDownColor:    'rgba(255,23,68,0.7)',
           priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
-        const candleData = rawData.map(r => ({
+        const candleData = dataWithIndicators.map(r => ({
           time:  r.date,
           open:  r.open  || r.ltp || 0,
           high:  r.high  || r.ltp || 0,
@@ -191,7 +277,7 @@ function NepseChart({ symbol, livePrice }) {
           downColor: '#ff1744',
           priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
-        priceSeries.setData(rawData.map(r => ({
+        priceSeries.setData(dataWithIndicators.map(r => ({
           time:  r.date,
           open:  r.open  || r.ltp || 0,
           high:  r.high  || r.ltp || 0,
@@ -205,7 +291,7 @@ function NepseChart({ symbol, livePrice }) {
           lineWidth: 2,
           priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
-        priceSeries.setData(rawData.map(r => ({
+        priceSeries.setData(dataWithIndicators.map(r => ({
           time:  r.date,
           value: r.close || r.ltp || 0,
         })));
@@ -218,7 +304,7 @@ function NepseChart({ symbol, livePrice }) {
           lineWidth: 2,
           priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
         });
-        priceSeries.setData(rawData.map(r => ({
+        priceSeries.setData(dataWithIndicators.map(r => ({
           time:  r.date,
           value: r.close || r.ltp || 0,
         })));
@@ -226,8 +312,72 @@ function NepseChart({ symbol, livePrice }) {
 
       mainSeriesRef.current = priceSeries;
 
+      // ── SMA 20 Overlay ──────────────────────────────────────────────────
+      if (showSMA20) {
+        const sma20Data = dataWithIndicators
+          .filter(r => r.sma20 !== null)
+          .map(r => ({ time: r.date, value: r.sma20 }));
+        if (sma20Data.length > 0) {
+          const sma20Series = chart.addSeries(LineSeries, {
+            color: '#2196f3',
+            lineWidth: 1.5,
+            title: 'SMA 20',
+          });
+          sma20Series.setData(sma20Data);
+        }
+      }
+
+      // ── SMA 50 Overlay ──────────────────────────────────────────────────
+      if (showSMA50) {
+        const sma50Data = dataWithIndicators
+          .filter(r => r.sma50 !== null)
+          .map(r => ({ time: r.date, value: r.sma50 }));
+        if (sma50Data.length > 0) {
+          const sma50Series = chart.addSeries(LineSeries, {
+            color: '#ffb74d',
+            lineWidth: 1.5,
+            title: 'SMA 50',
+          });
+          sma50Series.setData(sma50Data);
+        }
+      }
+
+      // ── Bollinger Bands Overlay ─────────────────────────────────────────
+      if (showBB) {
+        const bbUpperData = dataWithIndicators
+          .filter(r => r.bbUpper !== null)
+          .map(r => ({ time: r.date, value: r.bbUpper }));
+        const bbBasisData = dataWithIndicators
+          .filter(r => r.bbBasis !== null)
+          .map(r => ({ time: r.date, value: r.bbBasis }));
+        const bbLowerData = dataWithIndicators
+          .filter(r => r.bbLower !== null)
+          .map(r => ({ time: r.date, value: r.bbLower }));
+
+        if (bbBasisData.length > 0) {
+          const upperSeries = chart.addSeries(LineSeries, {
+            color: 'rgba(233, 30, 99, 0.45)',
+            lineWidth: 1,
+            title: 'BB Upper',
+          });
+          const middleSeries = chart.addSeries(LineSeries, {
+            color: 'rgba(255, 255, 255, 0.25)',
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            title: 'BB Basis',
+          });
+          const lowerSeries = chart.addSeries(LineSeries, {
+            color: 'rgba(233, 30, 99, 0.45)',
+            lineWidth: 1,
+            title: 'BB Lower',
+          });
+          upperSeries.setData(bbUpperData);
+          middleSeries.setData(bbBasisData);
+          lowerSeries.setData(bbLowerData);
+        }
+      }
+
       // ── Volume series (always shown as histogram below) ──────────────────
-      const maxVol = Math.max(...rawData.map(r => r.volume || 0));
       const volumeSeries = chart.addSeries(HistogramSeries, {
         color:          'rgba(0,242,254,0.18)',
         priceFormat:    { type: 'volume' },
@@ -241,7 +391,7 @@ function NepseChart({ symbol, livePrice }) {
         scaleMargins: { top: 0.05, bottom: 0.22 },
       });
 
-      volumeSeries.setData(rawData.map(r => {
+      volumeSeries.setData(dataWithIndicators.map(r => {
         const isUp = (r.close || 0) >= (r.open || 0);
         return {
           time:  r.date,
@@ -251,8 +401,54 @@ function NepseChart({ symbol, livePrice }) {
       }));
       volumeSeriesRef.current = volumeSeries;
 
-      // Show recent 150 bars to make candlesticks readable (user can scroll left for older history)
-      const totalCandles = rawData.length;
+      // Subscribe to Crosshair hover info to update Legend
+      chart.subscribeCrosshairMove(param => {
+        if (destroyed) return;
+        if (param.time) {
+          const dataPoint = dataWithIndicators.find(r => r.date === param.time);
+          if (dataPoint) {
+            const idx = dataWithIndicators.indexOf(dataPoint);
+            const prev = idx > 0 ? dataWithIndicators[idx - 1] : null;
+            setHoverData({
+              open: dataPoint.open || dataPoint.ltp || 0,
+              high: dataPoint.high || dataPoint.ltp || 0,
+              low: dataPoint.low || dataPoint.ltp || 0,
+              close: dataPoint.close || dataPoint.ltp || 0,
+              volume: dataPoint.volume || 0,
+              change: prev ? ((dataPoint.close - prev.close) / prev.close) * 100 : 0,
+              sma20: dataPoint.sma20,
+              sma50: dataPoint.sma50,
+              bbUpper: dataPoint.bbUpper,
+              bbBasis: dataPoint.bbBasis,
+              bbLower: dataPoint.bbLower,
+              date: dataPoint.date
+            });
+          }
+        } else {
+          // Fallback to latest statistics
+          if (dataWithIndicators.length > 0) {
+            const last = dataWithIndicators[dataWithIndicators.length - 1];
+            const prev = dataWithIndicators[dataWithIndicators.length - 2];
+            setHoverData({
+              open: last.open || last.close || 0,
+              high: last.high || last.close || 0,
+              low: last.low || last.close || 0,
+              close: last.close || 0,
+              volume: last.volume || 0,
+              change: prev ? ((last.close - prev.close) / prev.close) * 100 : 0,
+              sma20: last.sma20,
+              sma50: last.sma50,
+              bbUpper: last.bbUpper,
+              bbBasis: last.bbBasis,
+              bbLower: last.bbLower,
+              date: last.date
+            });
+          }
+        }
+      });
+
+      // Show recent 150 bars to make candlesticks readable
+      const totalCandles = dataWithIndicators.length;
       if (totalCandles > 150) {
         chart.timeScale().setVisibleLogicalRange({
           from: totalCandles - 150,
@@ -284,9 +480,10 @@ function NepseChart({ symbol, livePrice }) {
         chartRef.current = null;
       }
     };
-  }, [rawData, chartType]);
+  }, [dataWithIndicators, chartType, showSMA20, showSMA50, showBB]);
 
-  const isUp = (stats?.change ?? 0) >= 0;
+  const activeStats = hoverData || stats;
+  const isUp = (activeStats?.change ?? 0) >= 0;
 
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: 0 }}>
@@ -296,54 +493,119 @@ function NepseChart({ symbol, livePrice }) {
         {/* Symbol + live stats */}
         <div className="nepse-chart-info">
           <span className="nepse-chart-symbol">{symbol}</span>
-          {stats && (
+          {activeStats && (
             <>
-              <span className="nepse-stat">O <b>{fmt(stats.open)}</b></span>
-              <span className="nepse-stat">H <b style={{ color: '#00e676' }}>{fmt(stats.high)}</b></span>
-              <span className="nepse-stat">L <b style={{ color: '#ff1744' }}>{fmt(stats.low)}</b></span>
-              <span className="nepse-stat">C <b style={{ color: '#00f2fe' }}>{fmt(stats.ltp)}</b></span>
+              <span className="nepse-stat">O <b>{fmt(activeStats.open)}</b></span>
+              <span className="nepse-stat">H <b style={{ color: '#00e676' }}>{fmt(activeStats.high)}</b></span>
+              <span className="nepse-stat">L <b style={{ color: '#ff1744' }}>{fmt(activeStats.low)}</b></span>
+              <span className="nepse-stat">C <b style={{ color: '#00f2fe' }}>{fmt(activeStats.close || activeStats.ltp)}</b></span>
               <span className="nepse-stat">
-                Vol <b>{(stats.volume / 1000).toFixed(1)}K</b>
+                Vol <b>{activeStats.volume >= 1000 ? `${(activeStats.volume / 1000).toFixed(1)}K` : activeStats.volume}</b>
               </span>
               <span className={`nepse-change-badge ${isUp ? 'up' : 'down'}`}>
-                {isUp ? '▲' : '▼'} {Math.abs(stats.change).toFixed(2)}%
+                {isUp ? '▲' : '▼'} {Math.abs(activeStats.change).toFixed(2)}%
               </span>
             </>
           )}
-          {!stats && !loading && (
+          {!activeStats && !loading && (
             <span className="nepse-stat" style={{ color: '#64748b', fontSize: 10 }}>
               ⚠ No data in DB — showing simulated candles
             </span>
           )}
         </div>
 
-        {/* Chart type switcher */}
-        <div className="nepse-chart-types">
-          {CHART_TYPES.map(t => (
+        {/* Indicators Selector & Chart type switcher */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {/* Indicators toggles */}
+          <div className="nepse-chart-types" style={{ borderRight: '1px solid rgba(255,255,255,0.08)', paddingRight: 12 }}>
             <button
-              key={t.key}
-              className={`chart-type-btn ${chartType === t.key ? 'active' : ''}`}
-              onClick={() => setChartType(t.key)}
+              className={`chart-type-btn ${showSMA20 ? 'active' : ''}`}
+              onClick={() => setShowSMA20(p => !p)}
+              style={{ fontSize: 11, padding: '3px 8px' }}
             >
-              {t.label}
+              SMA 20
             </button>
-          ))}
+            <button
+              className={`chart-type-btn ${showSMA50 ? 'active' : ''}`}
+              onClick={() => setShowSMA50(p => !p)}
+              style={{ fontSize: 11, padding: '3px 8px' }}
+            >
+              SMA 50
+            </button>
+            <button
+              className={`chart-type-btn ${showBB ? 'active' : ''}`}
+              onClick={() => setShowBB(p => !p)}
+              style={{ fontSize: 11, padding: '3px 8px' }}
+            >
+              Bands
+            </button>
+          </div>
+
+          {/* Chart type switcher */}
+          <div className="nepse-chart-types">
+            {CHART_TYPES.map(t => (
+              <button
+                key={t.key}
+                className={`chart-type-btn ${chartType === t.key ? 'active' : ''}`}
+                onClick={() => setChartType(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {/* ── Chart canvas ── */}
       <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 12px' }}>
         {loading && (
-          <div className="chart-loading">
+          <div className="chart-loading" style={{ zIndex: 20 }}>
             <div className="chart-spinner" />
             <span>Loading historical data…</span>
           </div>
         )}
         {error && !loading && (
-          <div className="chart-loading">
+          <div className="chart-loading" style={{ zIndex: 20 }}>
             <span style={{ color: '#ff1744' }}>⚠ {error}</span>
           </div>
         )}
+        
+        {/* Dynamic Indicator Legend Overlay (TradingView style) */}
+        {!loading && !error && (showSMA20 || showSMA50 || showBB) && (
+          <div className="chart-indicators-legend" style={{
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            zIndex: 10,
+            pointerEvents: 'none',
+            fontSize: 10,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            fontFamily: 'monospace',
+            backgroundColor: 'rgba(6, 8, 20, 0.65)',
+            padding: '4px 8px',
+            borderRadius: 4,
+            border: '1px solid rgba(255, 255, 255, 0.05)'
+          }}>
+            {showSMA20 && (
+              <span style={{ color: '#2196f3' }}>
+                SMA 20: {activeStats?.sma20 ? activeStats.sma20.toFixed(2) : '—'}
+              </span>
+            )}
+            {showSMA50 && (
+              <span style={{ color: '#ffb74d' }}>
+                SMA 50: {activeStats?.sma50 ? activeStats.sma50.toFixed(2) : '—'}
+              </span>
+            )}
+            {showBB && (
+              <span style={{ color: 'rgba(233, 30, 99, 0.85)' }}>
+                BB(20, 2): {activeStats?.bbUpper ? `${activeStats.bbUpper.toFixed(2)} | ${activeStats.bbBasis.toFixed(2)} | ${activeStats.bbLower.toFixed(2)}` : '—'}
+              </span>
+            )}
+          </div>
+        )}
+
         <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
       </div>
     </div>

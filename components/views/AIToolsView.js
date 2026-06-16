@@ -77,7 +77,7 @@ function RiskCalculator({ balance }) {
 }
 
 export default function AIToolsView() {
-  const { balance, triggerNotification } = useTrading();
+  const { balance, portfolio, assets, transactions, triggerNotification } = useTrading();
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -86,10 +86,12 @@ export default function AIToolsView() {
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const chatEndRef = useRef(null);
+  const chatHistoryRef = useRef(null);
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatHistoryRef.current) {
+      chatHistoryRef.current.scrollTop = chatHistoryRef.current.scrollHeight;
+    }
   }, [messages]);
 
   async function sendMessage() {
@@ -101,10 +103,38 @@ export default function AIToolsView() {
     setLoading(true);
 
     try {
+      // Map the portfolio object to the structure expected by ai.py
+      const holdingsList = Object.keys(portfolio).map(symbol => {
+        const holding = portfolio[symbol];
+        const asset = assets.find(a => a.symbol === symbol);
+        return {
+          symbol: symbol,
+          quantity: holding.qty,
+          avg_cost: holding.avgPrice,
+          current_price: asset ? asset.price : 0
+        };
+      });
+
+      const token = localStorage.getItem('fein_token');
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        headers,
+        body: JSON.stringify({
+          message: text,
+          portfolio: {
+            cash: balance.cash,
+            netLiquidation: balance.netLiq,
+            unrealizedPnL: balance.unrealizedPnL,
+            totalTrades: transactions.length,
+            winRate: 65.0, // Default win rate estimation
+            holdings: holdingsList
+          }
+        }),
       });
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'assistant', text: data.reply || 'Sorry, no response.' }]);
@@ -119,11 +149,25 @@ export default function AIToolsView() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   }
 
-  function clearChat() {
+  async function clearChat() {
     setMessages([{
       role: 'assistant',
       text: 'Chat cleared. How can I assist your trading strategy today?',
     }]);
+
+    try {
+      const token = localStorage.getItem('fein_token');
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      await fetch('/api/chat/clear', {
+        method: 'POST',
+        headers
+      });
+    } catch (err) {
+      console.error('Failed to clear chat memory on server:', err);
+    }
   }
 
   return (
@@ -144,13 +188,23 @@ export default function AIToolsView() {
             </button>
           </div>
 
-          <div className="chat-history" id="chatHistory">
+          <div className="chat-history" id="chatHistory" ref={chatHistoryRef}>
             {messages.map((m, i) => (
-              <div key={i} className={`chat-bubble ${m.role}`}>
-                {m.text.split('\n').map((line, j) => (
-                  <span key={j}>{line}{j < m.text.split('\n').length - 1 && <br />}</span>
-                ))}
-              </div>
+              <div
+                key={i}
+                className={`chat-bubble ${m.role}`}
+                {...(m.role === 'assistant'
+                  ? { dangerouslySetInnerHTML: { __html: m.text } }
+                  : {
+                      children: m.text.split('\n').map((line, j) => (
+                        <span key={j}>
+                          {line}
+                          {j < m.text.split('\n').length - 1 && <br />}
+                        </span>
+                      ))
+                    }
+                )}
+              />
             ))}
             {loading && (
               <div className="chat-bubble assistant">
@@ -158,7 +212,6 @@ export default function AIToolsView() {
                 Thinking…
               </div>
             )}
-            <div ref={chatEndRef} />
           </div>
 
           <div className="chat-input-area">

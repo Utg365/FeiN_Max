@@ -9,3 +9,4 @@ tenacity==8.3.0
 httpx==0.28.1
 websockets==14.1
 nepse @ git+https://github.com/basic-bgnr/NepseUnofficialApi.git@dev
+groq>=0.9.0

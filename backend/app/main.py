@@ -13,6 +13,7 @@ from app.repositories.stock_repository import StockRepository
 from app.services.live_market_service import LiveMarketService
 from app.services.daily_sync_service import DailySyncService
 from app.api.endpoints.stocks import router as stocks_router
+from app.api.endpoints.chat import router as chat_router
 import logging
 
 # Setup standard logging
@@ -80,6 +81,7 @@ def get_root():
 
 # Register endpoint routes
 app.include_router(stocks_router, prefix="/api/v1/stocks", tags=["Stocks & Market"])
+app.include_router(chat_router, prefix="/api/v1/chat", tags=["AI Chatbot"])
 
 if __name__ == "__main__":
     import uvicorn

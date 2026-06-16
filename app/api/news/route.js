@@ -106,19 +106,30 @@ async function fetchNepalNews() {
       items.forEach(item => {
         const title = cleanText(item.title);
         const summary = cleanText(item.contentSnippet || item.content || '').substring(0, 200);
-        const time = getTimeAgo(item.pubDate);
         const { sentiment, score } = getSentiment(title, summary);
+        
+        let pubDateStr = new Date().toISOString();
+        if (item.pubDate) {
+          try {
+            const parsed = new Date(item.pubDate);
+            if (!isNaN(parsed.getTime())) {
+              pubDateStr = parsed.toISOString();
+            }
+          } catch (e) {
+            // Keep default
+          }
+        }
         
         if (title) {
           articles.push({
             title,
             summary: summary + (summary.length === 200 ? '...' : ''),
             source: src.name,
-            url: item.link || null,
-            time,
-            sentiment,
+            link: item.link || null,
+            pubDate: pubDateStr,
+            sentiment: sentiment.toLowerCase(),
             score,
-            category: 'NEPAL'
+            region: 'NEPAL'
           });
         }
       });
@@ -131,24 +142,44 @@ async function fetchNepalNews() {
   return articles;
 }
 
-export async function GET() {
+export async function GET(request) {
   try {
     const now = Date.now();
+    let forceRefresh = false;
     
-    // Refresh cache if older than 5 minutes (300,000 ms) or if empty
-    if (now - newsCacheTime > 300000 || newsCache.length === 0) {
+    if (request && request.url) {
+      try {
+        const { searchParams } = new URL(request.url);
+        forceRefresh = searchParams.get('refresh') === '1';
+      } catch (urlErr) {
+        // Silently ignore URL parsing errors
+      }
+    }
+    
+    // Refresh cache if forceRefresh is requested, cache is older than 5 minutes, or empty
+    if (forceRefresh || now - newsCacheTime > 300000 || newsCache.length === 0) {
       const nepalArticles = await fetchNepalNews();
       
-      const intlArticles = INTL_FALLBACK.map(a => ({
-        ...a,
-        time: `${Math.floor(Math.random() * 50) + 5} min ago`
-      }));
+      const intlArticles = INTL_FALLBACK.map(a => {
+        const minutesAgo = Math.floor(Math.random() * 120) + 5;
+        const pubDate = new Date(now - minutesAgo * 60 * 1000).toISOString();
+        return {
+          title: a.title,
+          summary: a.summary,
+          source: a.source,
+          link: a.url || null,
+          pubDate,
+          sentiment: (a.sentiment || 'NEUTRAL').toLowerCase(),
+          score: a.score,
+          region: 'INTL'
+        };
+      });
       
       newsCache = [...nepalArticles, ...intlArticles];
       newsCacheTime = now;
     }
 
-    return Response.json(newsCache, { status: 200 });
+    return Response.json({ articles: newsCache }, { status: 200 });
   } catch (err) {
     console.error('Market news fetch error:', err);
     return Response.json({ error: 'Failed to fetch news.' }, { status: 500 });
