@@ -42,88 +42,123 @@ async def get_live_market_data(
     Formats assets so they can drop directly into next.js state.
     """
     try:
+        # 1. Fetch base stock list and last closing prices from Supabase (FeinTra)
+        db_assets = {}
+        try:
+            # Fetch the latest 2000 records from FeinTra sorted by Date desc to ensure we get the latest record of all symbols
+            db_res = repo.client.table("FeinTra").select("*").order("Date", desc=True).limit(2000).execute()
+            for r in (db_res.data or []):
+                symbol = r.get("Symbol")
+                if not symbol:
+                    continue
+                
+                symbol_upper = symbol.strip().upper()
+                # Since we sort by Date desc, the first record we encounter for each symbol is its latest one
+                if symbol_upper in db_assets:
+                    continue
+                
+                vol_str = r.get("Volume")
+                vol = 0
+                if vol_str:
+                    try:
+                        vol = int(float(vol_str))
+                    except Exception:
+                        pass
+                
+                to_str = r.get("Turn Over")
+                turnover = 0.0
+                if to_str and to_str != "-":
+                    try:
+                        turnover = float(to_str)
+                    except Exception:
+                        pass
+                
+                pct_str = r.get("Percent Change", "0.00 %").replace("%", "").strip()
+                try:
+                    pct = float(pct_str)
+                except Exception:
+                    pct = 0.0
+
+                close_price = float(r.get("Close") or 0.0)
+
+                db_assets[symbol_upper] = {
+                    "symbol": symbol_upper,
+                    "name": symbol_upper,
+                    "exchange": "NEPSE",
+                    "category": "NEPSE",
+                    "price": close_price,
+                    "change": pct,
+                    "volatility": 0.20,
+                    "volume": vol,
+                    "high": float(r.get("High") or close_price),
+                    "low": float(r.get("Low") or close_price),
+                    "open": float(r.get("Open") or close_price),
+                    "previousClose": close_price - (close_price * pct / 100.0),
+                    "turnover": turnover
+                }
+        except Exception as db_err:
+            logger.error(f"Error fetching base prices from Supabase: {db_err}")
+
+        # 2. Fetch live updates if available from NEPSE API
         raw_live = []
         try:
             raw_live = await live_service.get_live_market()
         except Exception as e:
-            logger.warning(f"Error fetching live market data from NEPSE API: {e}. Falling back to Supabase DB.")
+            logger.warning(f"Error fetching live market data from NEPSE API: {e}")
 
-        # If the market is closed, live call failed, or no live data is returned, fall back to FeinTra latest records
-        if not raw_live:
-            logger.info("Live market data not available. Fetching last closing prices from Supabase DB...")
-            try:
-                latest_res = repo.client.table("FeinTra").select("Date").order("Date", desc=True).limit(1).execute()
-                if latest_res.data:
-                    latest_date = latest_res.data[0]["Date"]
-                    db_res = repo.client.table("FeinTra").select("*").eq("Date", latest_date).limit(1000).execute()
-                    for r in (db_res.data or []):
-                        symbol = r.get("Symbol")
-                        if not symbol:
-                            continue
-                        
-                        vol_str = r.get("Volume")
-                        vol = 0
-                        if vol_str:
-                            try:
-                                vol = int(float(vol_str))
-                            except Exception:
-                                pass
-                        
-                        to_str = r.get("Turn Over")
-                        turnover = 0.0
-                        if to_str and to_str != "-":
-                            try:
-                                turnover = float(to_str)
-                            except Exception:
-                                pass
-                        
-                        pct_str = r.get("Percent Change", "0.00 %").replace("%", "").strip()
-                        try:
-                            pct = float(pct_str)
-                        except Exception:
-                            pct = 0.0
-
-                        raw_live.append({
-                            "symbol": symbol.strip().upper(),
-                            "securityName": symbol.strip().upper(),
-                            "lastTradedPrice": float(r.get("Close") or 0.0),
-                            "percentageChange": pct,
-                            "totalTradeQuantity": vol,
-                            "highPrice": float(r.get("High") or r.get("Close") or 0.0),
-                            "lowPrice": float(r.get("Low") or r.get("Close") or 0.0),
-                            "openPrice": float(r.get("Open") or r.get("Close") or 0.0),
-                            "previousClose": float(r.get("Close") or 0.0) - (float(r.get("Close") or 0.0) * pct / 100.0),
-                            "totalTradeValue": turnover
-                        })
-            except Exception as db_err:
-                logger.error(f"Error fetching fallback prices from Supabase: {db_err}")
-
-        formatted_assets = []
+        # 3. Merge live market data on top of the base database assets
         for item in raw_live:
             symbol = item.get("symbol")
             if not symbol:
                 continue
+            symbol_upper = symbol.strip().upper()
             
-            ltp = item.get("lastTradedPrice", 0.0)
-            change = item.get("percentageChange", 0.0)
-            
-            formatted_assets.append({
-                "symbol": symbol.strip().upper(),
-                "name": item.get("securityName") or symbol,
-                "exchange": "NEPSE",
-                "category": "NEPSE",
-                "price": float(ltp) if ltp else 0.0,
-                "change": float(change) if change else 0.0,
-                "volatility": 0.20,
-                "volume": int(item.get("totalTradeQuantity") or 0),
-                "high": float(item.get("highPrice") or ltp),
-                "low": float(item.get("lowPrice") or ltp),
-                "open": float(item.get("openPrice") or ltp),
-                "previousClose": float(item.get("previousClose") or ltp),
-                "turnover": float(item.get("totalTradeValue") or 0.0)
-            })
-            
-        return formatted_assets
+            ltp = item.get("lastTradedPrice")
+            change = item.get("percentageChange")
+            vol = item.get("totalTradeQuantity")
+            high = item.get("highPrice")
+            low = item.get("lowPrice")
+            open_p = item.get("openPrice")
+            prev_close = item.get("previousClose")
+            turnover = item.get("totalTradeValue")
+            name = item.get("securityName") or symbol_upper
+
+            price_val = float(ltp) if ltp is not None else 0.0
+            change_val = float(change) if change is not None else 0.0
+
+            # If symbol already in db_assets, update it with live data
+            if symbol_upper in db_assets:
+                db_assets[symbol_upper].update({
+                    "name": name,
+                    "price": price_val,
+                    "change": change_val,
+                    "volume": int(vol) if vol is not None else db_assets[symbol_upper]["volume"],
+                    "high": float(high) if high is not None else price_val,
+                    "low": float(low) if low is not None else price_val,
+                    "open": float(open_p) if open_p is not None else price_val,
+                    "previousClose": float(prev_close) if prev_close is not None else price_val - (price_val * change_val / 100.0),
+                    "turnover": float(turnover) if turnover is not None else db_assets[symbol_upper]["turnover"]
+                })
+            else:
+                # If it's a new symbol not in the database, add it as a new NEPSE asset
+                db_assets[symbol_upper] = {
+                    "symbol": symbol_upper,
+                    "name": name,
+                    "exchange": "NEPSE",
+                    "category": "NEPSE",
+                    "price": price_val,
+                    "change": change_val,
+                    "volatility": 0.20,
+                    "volume": int(vol) if vol is not None else 0,
+                    "high": float(high) if high is not None else price_val,
+                    "low": float(low) if low is not None else price_val,
+                    "open": float(open_p) if open_p is not None else price_val,
+                    "previousClose": float(prev_close) if prev_close is not None else price_val - (price_val * change_val / 100.0),
+                    "turnover": float(turnover) if turnover is not None else 0.0
+                }
+
+        # Convert back to list format
+        return list(db_assets.values())
     except Exception as e:
         logger.error(f"Error fetching live market data: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch live prices.")

@@ -74,10 +74,33 @@ class StockRepository:
         """Fetch all registered stocks from database."""
         try:
             response = self.client.table("nepse_stocks").select("*").execute()
-            return response.data or []
+            if response.data:
+                return response.data
+        except Exception:
+            pass
+
+        # Fallback to FeinTra latest 2000 records to extract unique symbols
+        try:
+            logger.info("Falling back to FeinTra for getting all registered stocks...")
+            res = self.client.table("FeinTra").select("Symbol, Sector").order("Date", desc=True).limit(2000).execute()
+            stocks = []
+            seen = set()
+            for r in (res.data or []):
+                sym = r.get("Symbol")
+                if sym:
+                    sym_upper = sym.strip().upper()
+                    if sym_upper not in seen:
+                        seen.add(sym_upper)
+                        stocks.append({
+                            "symbol": sym_upper,
+                            "name": sym_upper,
+                            "sector": r.get("Sector") or "null",
+                            "category": "STOCKS"
+                        })
+            return stocks
         except Exception as e:
-            logger.error(f"Error fetching all stocks: {e}")
-            return []
+            logger.error(f"Error fetching fallback stocks from FeinTra: {e}")
+        return []
 
     def get_historical_data(self, symbol: str, limit: int = 1500) -> List[Dict[str, Any]]:
         """Fetch historical price logs for a symbol from FeinTra, sorted by date ascending."""

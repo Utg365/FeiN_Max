@@ -187,7 +187,7 @@ export default function DashboardView() {
               <h3 className="card-title"><i className="fa-solid fa-fire" /> Top Global Movers</h3>
               <span className="badge-ex">NYSE / NASDAQ / CRYPTO</span>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 20 }}>
               <div>
                 <h4 style={{ fontSize: 13, color: 'var(--bullish-green)', marginBottom: 12, fontWeight: 700 }}>
                   <i className="fa-solid fa-circle-chevron-up" /> Top Gainers
@@ -217,7 +217,7 @@ export default function DashboardView() {
               <h3 className="card-title"><i className="fa-solid fa-chart-line" /> NEPSE Market Movers</h3>
               <span className="badge-ex">NEPSE Stocks</span>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 20 }}>
               <div>
                 <h4 style={{ fontSize: 13, color: 'var(--bullish-green)', marginBottom: 12, fontWeight: 700 }}>
                   <i className="fa-solid fa-circle-chevron-up" /> Top Gainers
