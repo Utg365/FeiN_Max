@@ -775,16 +775,16 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # Demo portfolio — simulates a real user's account
-DEMO_PORTFOLIO = {
-    "cash": 100000.00,
-    "netLiquidation": 100000.00,
-    "unrealizedPnL": 0.0,
-    "totalTrades": 0,
-    "winRate": 0.0,
-    "holdings": []
-}
+    DEMO_PORTFOLIO = {
+        "cash": 100000.00,
+        "netLiquidation": 100000.00,
+        "unrealizedPnL": 0.0,
+        "totalTrades": 0,
+        "winRate": 0.0,
+        "holdings": []
+    }
 
-while True:
+    while True:
         try:
             user_input = input("\nYou: ").strip()
         except (EOFError, KeyboardInterrupt):
