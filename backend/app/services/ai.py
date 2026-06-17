@@ -31,6 +31,16 @@ except Exception as e:
 #  CONFIGURATION
 # ================================================================
 
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    for path in [".env", "backend/.env", "../.env", "../../.env"]:
+        if os.path.exists(path):
+            load_dotenv(path)
+            break
+except ImportError:
+    pass
+
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 MODEL        = "llama-3.1-8b-instant"
 MAX_TOKENS   = 1000

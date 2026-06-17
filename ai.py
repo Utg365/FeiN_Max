@@ -33,6 +33,16 @@ except ImportError:
 #  CONFIGURATION — edit these
 # ================================================================
 
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    for path in [".env", "backend/.env", "../.env", "../../.env"]:
+        if os.path.exists(path):
+            load_dotenv(path)
+            break
+except ImportError:
+    pass
+
 # Paste your free Groq key here, OR set env variable GROQ_API_KEY
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
